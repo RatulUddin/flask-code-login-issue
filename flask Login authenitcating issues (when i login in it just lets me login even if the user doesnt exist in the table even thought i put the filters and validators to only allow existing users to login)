@@ -1,0 +1,415 @@
+Im a issue with my code where the validator isnt working when i go to login it will let me login in with any account instead of account that are created/existing in the mysql database 
+
+from flask import Flask, render_template, redirect, url_for, flash
+from flask_bootstrap import Bootstrap
+from flask_wtf import FlaskForm
+from wtforms import StringField, SubmitField
+from wtforms.validators import DataRequired, ValidationError, Email, EqualTo, length, Regexp 
+from flask_sqlalchemy import SQLAlchemy
+import pymysql
+from wtforms import StringField, SubmitField, DateTimeField, TextAreaField, PasswordField, BooleanField
+from wtforms.fields import DateField
+from werkzeug.security import generate_password_hash, check_password_hash 
+from wtforms.validators import DataRequired, Email
+from flask_login import LoginManager
+from flask import request, redirect, url_for, render_template, flash
+from werkzeug.security import check_password_hash 
+from flask_login import current_user
+from flask_login import UserMixin
+from wtforms.validators import EqualTo
+from flask_login import login_user, logout_user, login_required
+from flask import session
+
+# Initialize our config
+pymysql.install_as_MySQLdb()
+app = Flask(__name__)
+bootstrap = Bootstrap(app)
+app.config['SECRET_KEY'] = 'hard to guess string'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql://root:Redspark12@localhost:3306/managementdb'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# Define our device model
+class Device(db.Model):
+    __tablename__ = 'devices'
+    device_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    device_name = db.Column(db.String(255), nullable=False)
+    ip_address = db.Column(db.String(255), unique=True, nullable=False)
+    device_type = db.Column(db.String(255), nullable=False)
+    location = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(255), nullable=False)
+
+
+# Define our device form to edit our device (we are going to load the device form based on device ID)
+class DeviceForm(FlaskForm):
+    device_name = StringField('Device Name', validators=[DataRequired()])
+    ip_address = StringField('IP Address', validators=[DataRequired()])
+    device_type = StringField('Device Type', validators=[DataRequired()])
+    location = StringField('Location', validators=[DataRequired()])
+    status = StringField('Status', validators=[DataRequired()])
+    submit = SubmitField('Submit')
+
+
+# Device form to add a new device
+class AddDeviceForm(FlaskForm):
+    device_name = StringField('Device Name', validators=[DataRequired()])
+    ip_address = StringField('IP Address', validators=[DataRequired()])
+    device_type = StringField('Device Type', validators=[DataRequired()])
+    location = StringField('Location', validators=[DataRequired()])
+    status = StringField('Status', validators=[DataRequired()])
+    submit = SubmitField('Add Device')
+
+
+# Route to manage devices (we will list out all devices, give the option to add/remove on this page)
+@app.route('/manage-devices', methods=['GET', 'POST'])
+@login_required
+def manage_devices():
+    # Call our form to prompt them if they wish to add a device
+    form = AddDeviceForm()
+    if form.validate_on_submit():
+        new_device = Device(
+            device_name=form.device_name.data,
+            ip_address=form.ip_address.data,
+            device_type=form.device_type.data,
+            location=form.location.data,
+            status=form.status.data
+        )
+        # If all fields are added, append our db and save
+        db.session.add(new_device)
+        db.session.commit()
+        # Flash the user success
+        flash('New device added!', 'success')
+        # Redirect them to the manage page after they're done
+        return redirect(url_for('manage_devices'))
+   
+    # Query all results from the db
+    devices = Device.query.all()
+    return render_template('manage_devices.html', devices=devices, add_device_form=form)
+
+
+# Route to handle editing a device (input required is device id to load the device properties)
+@app.route('/edit_device/<int:device_id>', methods=['GET', 'POST'])
+def edit_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    form = DeviceForm(obj=device)
+    if form.validate_on_submit():
+        device.device_name = form.device_name.data
+        device.ip_address = form.ip_address.data
+        device.device_type = form.device_type.data
+        device.location = form.location.data
+        device.status = form.status.data
+        # If all fields are added, append our db and save
+        db.session.commit()
+        # Redirect them to the manage page after they're done
+        return redirect(url_for('manage_devices'))
+    return render_template('edit_device.html', form=form)
+
+
+# Route to handle deleting a device (input required is device id to delete the correct device)
+@app.route('/delete-device/<int:device_id>', methods=['POST'])
+def delete_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    db.session.delete(device)
+    db.session.commit()
+    # Flash the user the action has been completed
+    flash('Device successfully deleted.', 'success')
+    return redirect(url_for('manage_devices'))
+
+
+# Route to manage network logs
+# Define NetworkLog model
+class NetworkLog(db.Model):
+    __tablename__ = 'network_logs'
+    log_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    device_id = db.Column(db.Integer, nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False)
+    log_description = db.Column(db.Text, nullable=False)
+
+# Define AddNetworkLogForm to add a new network log
+class AddNetworkLogForm(FlaskForm):
+    device_id = StringField('Device ID', validators=[DataRequired()])
+    timestamp = DateTimeField('Timestamp', validators=[DataRequired()])
+    log_description = TextAreaField('Log Description', validators=[DataRequired()])
+    submit = SubmitField('Add Log')
+
+# Define EditNetworkLogForm to edit an existing network log
+class EditNetworkLogForm(FlaskForm):
+    device_id = StringField('Device ID', validators=[DataRequired()])
+    timestamp = DateTimeField('Timestamp', validators=[DataRequired()])
+    log_description = TextAreaField('Log Description', validators=[DataRequired()])
+    submit = SubmitField('Update Log')
+
+# Route to manage network logs
+@app.route('/manage-network-logs', methods=['GET', 'POST'])
+@login_required
+def manage_network_logs():
+    add_form = AddNetworkLogForm()
+    if add_form.validate_on_submit():
+        new_log = NetworkLog(
+            device_id=add_form.device_id.data,
+            timestamp=add_form.timestamp.data,
+            log_description=add_form.log_description.data
+        )
+        db.session.add(new_log)
+        db.session.commit()
+        flash('New network log added!', 'success')
+        return redirect(url_for('manage_network_logs'))
+   
+    network_logs = NetworkLog.query.all()
+    return render_template('manage_network_logs.html', network_logs=network_logs, add_log_form=add_form)
+
+# Route to handle editing a network log
+@app.route('/edit_network_log/<int:log_id>', methods=['GET', 'POST'])
+def edit_network_log(log_id):
+    log = NetworkLog.query.get_or_404(log_id)
+    edit_form = EditNetworkLogForm(obj=log)
+    if edit_form.validate_on_submit():
+        log.device_id = edit_form.device_id.data
+        log.timestamp = edit_form.timestamp.data
+        log.log_description = edit_form.log_description.data
+        db.session.commit()
+        flash('Network log updated!', 'success')
+        return redirect(url_for('manage_network_logs'))
+    return render_template('edit_network_log.html', form=edit_form)
+
+
+
+# Route to manage maintenance records
+class MaintenanceRecord(db.Model):
+    __tablename__ = 'maintenance_records'
+    record_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('devices.device_id'), nullable=False)
+    maintenance_date = db.Column(db.Date, nullable=False)
+    details = db.Column(db.Text, nullable=False)
+    technician_name = db.Column(db.String(100), nullable=False)
+
+# Define form to add a new maintenance record
+class AddMaintenanceRecordForm(FlaskForm):
+    device_id = StringField('Device ID', validators=[DataRequired()])
+    maintenance_date = DateField('Maintenance Date', validators=[DataRequired()])
+    details = TextAreaField('Details', validators=[DataRequired()])
+    technician_name = StringField('Technician Name', validators=[DataRequired()])
+    submit = SubmitField('Add Maintenance Record')
+
+# Define form to edit an existing maintenance record
+class EditMaintenanceRecordForm(FlaskForm):
+    device_id = StringField('Device ID', validators=[DataRequired()])
+    maintenance_date = DateField('Maintenance Date', validators=[DataRequired()])
+    details = TextAreaField('Details', validators=[DataRequired()])
+    technician_name = StringField('Technician Name', validators=[DataRequired()])
+    submit = SubmitField('Update Maintenance Record')
+
+# Route to manage maintenance records
+@app.route('/manage-maintenance-records', methods=['GET', 'POST'])
+@login_required
+def manage_maintenance_records():
+    form = AddMaintenanceRecordForm()
+    if form.validate_on_submit():
+        new_record = MaintenanceRecord(
+            device_id=form.device_id.data,
+            maintenance_date=form.maintenance_date.data,
+            details=form.details.data,
+            technician_name=form.technician_name.data
+        )
+        db.session.add(new_record)
+        db.session.commit()
+        flash('New maintenance record added!', 'success')
+        return redirect(url_for('manage_maintenance_records'))
+    
+    maintenance_records = MaintenanceRecord.query.all()
+    return render_template('manage_maintenance_records.html', maintenance_records=maintenance_records, add_record_form=form)
+
+# Route to handle editing a maintenance record
+@app.route('/edit_maintenance_record/<int:record_id>', methods=['GET', 'POST'])
+def edit_maintenance_record(record_id):
+    record = MaintenanceRecord.query.get_or_404(record_id)
+    form = EditMaintenanceRecordForm(obj=record)
+    if form.validate_on_submit():
+        record.device_id = form.device_id.data
+        record.maintenance_date = form.maintenance_date.data
+        record.details = form.details.data
+        record.technician_name = form.technician_name.data
+        db.session.commit()
+        flash('Maintenance record updated!', 'success')
+        return redirect(url_for('manage_maintenance_records'))
+    return render_template('edit_maintenance_record.html', form=form)
+
+# Route to handle deleting a maintenance record
+@app.route('/delete-maintenance-record/<int:record_id>', methods=['POST'])
+def delete_maintenance_record(record_id):
+    record = MaintenanceRecord.query.get_or_404(record_id)
+    db.session.delete(record)
+    db.session.commit()
+    flash('Maintenance record successfully deleted.', 'success')
+    return redirect(url_for('manage_maintenance_records'))
+
+
+
+# Route to manage users
+class User(db.Model):
+    __tablename__ = 'users'
+    user_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(255),unique=True,nullable=False)
+    password_hash = db.Column(db.String(255))
+    role = db.Column(db.String(255))
+    email = db.Column(db.String(255),unique=True, nullable=False)
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class RegisterForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired()])
+    submit = SubmitField('Submit')
+
+class LoginForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired()])
+    submit = SubmitField('Submit')
+
+# Define User form to edit user information
+class UserForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    password = StringField('Password', validators=[DataRequired()])
+    role = StringField('Role', validators=[DataRequired()])
+    email = StringField('Email', validators=[DataRequired()])
+    submit = SubmitField('Submit')
+    password = PasswordField('Password', validators=[DataRequired()])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired()])
+    
+
+# Define User form to add a new user
+class AddUserForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    password_hash = StringField('Password', validators=[DataRequired()])
+    role = StringField('Role', validators=[DataRequired()])
+    email = StringField('Email', validators=[DataRequired()])
+    submit = SubmitField('Add User')
+
+# Route to manage users
+@app.route('/manage-users', methods=['GET', 'POST'])
+#@login_required
+def manage_users():
+    form = AddUserForm()
+    if form.validate_on_submit():
+        new_user = User(
+            username=form.username.data,
+            password_hash=form.password_hash.data,
+            role=form.role.data,
+            email=form.email.data
+        )
+        db.session.add(new_user)
+        db.session.commit()
+        flash('New user added!', 'success')
+        return redirect(url_for('manage_users'))
+   
+    users = User.query.all()
+    return render_template('manage_users.html', users=users, add_user_form=form)
+
+# Route to handle editing a user
+@app.route('/edit_user/<int:user_id>', methods=['GET', 'POST'])
+def edit_user(user_id):
+    user = User.query.get_or_404(user_id)
+    form = UserForm(obj=user)
+    if form.validate_on_submit():
+        user.username = form.username.data
+        user.password_hash = form.password_hash.data
+        user.role = form.role.data
+        user.email = form.email.data
+        db.session.commit()
+        return redirect(url_for('manage_users'))
+    return render_template('edit_user.html', form=form)
+
+@app.route('/delete-user/<int:user_id>', methods=['POST'])
+def delete_user(user_id):
+    user = User.query.get_or_404(user_id)
+    db.session.delete(user)
+    db.session.commit()
+    flash('User successfully deleted.', 'success')
+    return redirect(url_for('manage_users'))
+
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    form = RegisterForm()
+    if form.validate_on_submit():
+        # Check if the user already exists
+        existing_user = User.query.filter_by(username=form.username.data).first()
+        if existing_user:
+            flash('Username already exists. Please choose a different one.', 'error')
+            return redirect(url_for('register'))
+
+        # Hash the password
+        hashed_password = generate_password_hash(form.password.data)
+
+        # Create a new user
+        new_user = User(username=form.username.data, email=form.email.data, password_hash=hashed_password)
+        db.session.add(new_user)
+        db.session.commit()
+
+        flash('Account created successfully. You can now log in.', 'success')
+        return redirect(url_for('login'))
+    return render_template('register.html', title='Register', form=form)
+
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# Route for user login
+@app.route('/login', methods=['GET', 'POST'])
+
+
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        # Check if the user exists
+        user = User.query.filter_by(username=form.username.data).first()
+        print("User:", user)  # Debug statement
+        
+        # Now, check the password only if the user exists
+        if user and check_password_hash(user.password_hash, form.password.data):
+            print("Login successful!")  # Debug statement
+            # Log in the user
+            login_user(user)
+            session['username'] = user.username 
+            flash('Login successful!', 'success')
+            
+            return redirect(url_for('index'))
+        else:
+            print("Incorrect password!")  # Debug statement
+            flash('Login unsuccessful. Please check username and password.', 'error')
+    return render_template('login.html', form=form)
+
+
+
+
+# Route for user logout
+@app.route('/logout')
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+# Default home page route
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    return render_template('index.html')
+
+@app.route('/main', methods=['GET', 'POST'])
+def main():
+    return render_template('main.html')
+
+
+# Run the program in debug mode
+if __name__ == '__main__':
+    app.run(debug=True)
